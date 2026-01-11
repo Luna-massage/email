@@ -17,7 +17,7 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors({
-    origin: '*', // In production, specify your actual domains
+    origin: 'https://lunamassage.netlify.app/admin', // In production, specify your actual domains
     credentials: true
 }));
 
