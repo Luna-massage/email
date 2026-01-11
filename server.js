@@ -15,13 +15,12 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ================ CRITICAL FIX 1: FIX CORS ================
-// REMOVE /admin from the URL - CORS origin should be just the domain
+// ================ FIX 1: CORRECT CORS ================
 app.use(cors({
     origin: [
         'https://lunamassage.netlify.app',  // ⬅️ REMOVED /admin
         'http://localhost:5500',
-        'http://localhost:3000'
+        'https://your-render-app.onrender.com'  // Add your Render URL here
     ],
     credentials: true,
     methods: ['GET', 'POST', 'OPTIONS']
@@ -33,50 +32,34 @@ app.use(express.json());
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 50, // Limit each IP to 50 requests per windowMs
-    message: { 
-        success: false, 
-        error: 'Too many requests from this IP, please try again later.' 
-    }
+    message: { error: 'Too many requests from this IP, please try again later.' }
 });
 
 app.use('/send-confirmation', limiter);
 
-// ================ CRITICAL FIX 2: ADD TIMEOUT TO TRANSPORTER ================
-let transporter;
-
-function initializeTransporter() {
-    transporter = nodemailer.createTransport({
-        service: 'gmail',
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: false,
-        requireTLS: true,  // IMPORTANT: Add this line
-        auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_APP_PASSWORD
-        },
-        // ⬇️ ADD THESE TIMEOUT SETTINGS TO PREVENT "CONNECTION TIMEOUT" ⬇️
-        connectionTimeout: 30000,    // 30 seconds
-        greetingTimeout: 30000,      // 30 seconds  
-        socketTimeout: 60000,        // 60 seconds
-        // ⬆️ THESE PREVENT TIMEOUT ERRORS ⬆️
-        tls: {
-            rejectUnauthorized: false  // Allow self-signed certificates
-        }
-    });
-}
+// ================ FIX 2: INITIALIZE TRANSPORTER IMMEDIATELY ================
+let transporter = nodemailer.createTransport({
+    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false,
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_APP_PASSWORD
+    },
+    requireTLS: true  // Important for Gmail
+});
 
 // Verify email configuration on startup
 async function verifyEmailConfig() {
     try {
         await transporter.verify();
-        console.log('✅ Email server is ready to send messages');
-        console.log('📧 Email user:', process.env.EMAIL_USER ? 'Configured' : 'Missing');
+        console.log('✓ Email server is ready to send messages');
     } catch (error) {
-        console.error('❌ Email configuration error:', error.message);
-        console.log('📋 Please check your environment variables on Render:');
+        console.error('✗ Email configuration error:', error.message);
+        console.log('Please check your environment variables on Render:');
         console.log('1. EMAIL_USER should be your Gmail address');
-        console.log('2. EMAIL_APP_PASSWORD should be your 16-character Gmail App Password');
+        console.log('2. EMAIL_APP_PASSWORD should be your Gmail App Password');
         console.log('   Get App Password: https://support.google.com/accounts/answer/185833');
     }
 }
@@ -113,44 +96,19 @@ function formatTime(timeStr) {
     }
 }
 
-// ================ CRITICAL FIX 3: ADD RETRY LOGIC ================
-async function sendEmailWithRetry(mailOptions, maxRetries = 2) {
-    let lastError;
-    
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-            console.log(`📤 Attempt ${attempt}/${maxRetries} to send email`);
-            const info = await transporter.sendMail(mailOptions);
-            return info;
-        } catch (error) {
-            lastError = error;
-            console.log(`⚠️ Attempt ${attempt} failed:`, error.message);
-            
-            if (attempt < maxRetries) {
-                // Wait before retrying (exponential backoff)
-                const delay = Math.pow(2, attempt) * 1000;
-                console.log(`⏳ Waiting ${delay/1000}s before retry...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        }
-    }
-    
-    throw lastError;
-}
-
 // Generate booking confirmation email (keep your existing HTML)
 function generateConfirmationEmail(booking) {
-    // Your existing HTML template - keep it as is
-    return `...`; // Your HTML content here
+    // Your existing HTML template here (keep it as is)
+    return `...`; // Your HTML template
 }
 
-// Generate booking reminder email (keep your existing HTML)  
+// Generate booking reminder email (keep your existing HTML)
 function generateReminderEmail(booking) {
-    // Your existing HTML template - keep it as is
-    return `...`; // Your HTML content here
+    // Your existing HTML template here (keep it as is)
+    return `...`; // Your HTML template
 }
 
-// ================ CRITICAL FIX 4: ADD ROOT ENDPOINT ================
+// ================ FIX 3: ADD ROOT ENDPOINT ================
 app.get('/', (req, res) => {
     res.json({
         service: 'Luna Massage Email Service',
@@ -158,7 +116,7 @@ app.get('/', (req, res) => {
         endpoints: {
             health: 'GET /health',
             sendEmail: 'POST /send-confirmation',
-            test: 'GET /test'
+            test: 'GET /test (development only)'
         },
         timestamp: new Date().toISOString()
     });
@@ -174,13 +132,9 @@ app.get('/health', (req, res) => {
     });
 });
 
-// ================ CRITICAL FIX 5: UPDATE /send-confirmation ENDPOINT ================
+// API endpoint to send confirmation email
 app.post('/send-confirmation', async (req, res) => {
     console.log('📧 Received email request:', new Date().toISOString());
-    console.log('Request body:', JSON.stringify(req.body, null, 2));
-    
-    // Set timeout for this request
-    req.setTimeout(45000); // 45 seconds timeout for the entire request
     
     try {
         const { booking, status } = req.body;
@@ -202,11 +156,6 @@ app.post('/send-confirmation', async (req, res) => {
             });
         }
         
-        // Check if transporter is initialized
-        if (!transporter) {
-            initializeTransporter();
-        }
-        
         // Select email template based on status
         const isConfirmation = status === 'confirmed';
         const subject = isConfirmation 
@@ -223,25 +172,15 @@ app.post('/send-confirmation', async (req, res) => {
             subject: subject,
             html: htmlContent,
             replyTo: 'info@lunamassage.com',
-            // Add text version as fallback
-            text: `Luna Massage Booking Confirmation\n\n` +
-                  `Booking ID: ${booking.bookingId || 'N/A'}\n` +
-                  `Service: ${booking.service || 'N/A'}\n` +
-                  `Date: ${formatDate(booking.date)}\n` +
-                  `Time: ${formatTime(booking.time)}\n` +
-                  `Amount: $${booking.servicePrice || '0'}\n\n` +
-                  `Thank you for your booking!`
+            text: `Luna Massage Booking Confirmation\n\nBooking ID: ${booking.bookingId}\nService: ${booking.service}\nDate: ${formatDate(booking.date)}\nTime: ${formatTime(booking.time)}\n\nThank you for your booking!`
         };
         
         console.log(`📤 Sending email to: ${booking.email}`);
-        console.log(`📝 Subject: ${subject}`);
         
-        // Send email with retry logic
-        const info = await sendEmailWithRetry(mailOptions, 2);
+        // Send email
+        const info = await transporter.sendMail(mailOptions);
         
-        console.log('✅ Email sent successfully!');
-        console.log(`   Message ID: ${info.messageId}`);
-        console.log(`   Response: ${info.response}`);
+        console.log('✓ Email sent successfully:', info.messageId);
         
         res.json({ 
             success: true, 
@@ -251,27 +190,11 @@ app.post('/send-confirmation', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Error sending email:', error);
+        console.error('✗ Error sending email:', error);
         
-        // Provide specific error messages
-        let errorMessage = error.message;
-        let statusCode = 500;
-        
-        if (error.message.includes('timeout') || error.code === 'ETIMEDOUT') {
-            errorMessage = 'Connection to Gmail timed out. Please try again.';
-            statusCode = 504;
-        } else if (error.code === 'EAUTH') {
-            errorMessage = 'Email authentication failed. Check your Gmail App Password on Render.';
-        } else if (error.code === 'ECONNECTION') {
-            errorMessage = 'Cannot connect to Gmail servers. Check network or firewall settings.';
-        } else if (error.code === 'ENOTFOUND') {
-            errorMessage = 'Cannot resolve Gmail server. Network issue.';
-        }
-        
-        res.status(statusCode).json({ 
+        res.status(500).json({ 
             success: false, 
-            error: errorMessage,
-            code: error.code,
+            error: error.message,
             timestamp: new Date().toISOString()
         });
     }
@@ -289,15 +212,8 @@ app.get('/test', async (req, res) => {
         }
         
         const testEmail = process.env.TEST_EMAIL || process.env.EMAIL_USER;
-        if (!testEmail) {
-            return res.status(400).json({
-                success: false,
-                error: 'No test email available. Set TEST_EMAIL or EMAIL_USER.'
-            });
-        }
-        
         const testBooking = {
-            bookingId: 'TEST-' + Date.now(),
+            bookingId: 'LM' + Date.now(),
             name: 'Test Client',
             email: testEmail,
             service: 'Swedish Massage',
@@ -313,25 +229,20 @@ app.get('/test', async (req, res) => {
             from: `"Luna Massage" <${process.env.EMAIL_USER}>`,
             to: testBooking.email,
             subject: `🧪 Test Email - Luna Massage`,
-            html: generateConfirmationEmail(testBooking),
-            text: 'Test email from Luna Massage Email Service'
+            html: generateConfirmationEmail(testBooking)
         };
         
-        const info = await sendEmailWithRetry(mailOptions, 1);
+        await transporter.sendMail(mailOptions);
         
         res.json({ 
             success: true, 
             message: 'Test email sent successfully',
-            to: testBooking.email,
-            messageId: info.messageId,
-            timestamp: new Date().toISOString()
+            to: testBooking.email
         });
     } catch (error) {
-        console.error('Test email error:', error);
         res.status(500).json({ 
             success: false, 
-            error: error.message,
-            timestamp: new Date().toISOString()
+            error: error.message 
         });
     }
 });
@@ -340,15 +251,15 @@ app.get('/test', async (req, res) => {
 app.use((req, res) => {
     res.status(404).json({ 
         error: 'Endpoint not found',
-        availableEndpoints: ['GET /', 'GET /health', 'POST /send-confirmation', 'GET /test'],
-        path: req.path,
-        method: req.method
+        availableEndpoints: ['/', '/health', '/send-confirmation', '/test'],
+        method: req.method,
+        path: req.path
     });
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-    console.error('🔥 Server error:', err);
+    console.error('Server error:', err);
     res.status(500).json({ 
         error: 'Internal server error',
         message: process.env.NODE_ENV === 'development' ? err.message : undefined
@@ -357,26 +268,26 @@ app.use((err, req, res, next) => {
 
 // Start server
 function startServer() {
-    // Initialize transporter
-    initializeTransporter();
+    // Initialize transporter is now done at the top
     
     app.listen(PORT, () => {
-        console.log('\n' + '═'.repeat(60));
-        console.log('   🌙 Luna Massage Email Service Server');
-        console.log('═'.repeat(60) + '\n');
-        console.log(`✅ Server running on port ${PORT}`);
-        console.log(`✅ Health check: http://localhost:${PORT}/health`);
-        console.log(`✅ Root endpoint: http://localhost:${PORT}/`);
-        console.log(`✅ Email endpoint: http://localhost:${PORT}/send-confirmation\n`);
+        console.log('\n╔══════════════════════════════════════════════╗');
+        console.log('║   🌙 Luna Massage Email Service Server     ║');
+        console.log('╚══════════════════════════════════════════════╝\n');
+        console.log(`✓ Server running on port ${PORT}`);
+        console.log(`✓ Health check: http://localhost:${PORT}/health`);
+        console.log(`✓ Root endpoint: http://localhost:${PORT}/`);
+        console.log(`✓ Email endpoint: http://localhost:${PORT}/send-confirmation\n`);
+        
+        // Log environment check
         console.log('📋 Environment check:');
-        console.log(`   PORT: ${PORT}`);
         console.log(`   EMAIL_USER: ${process.env.EMAIL_USER ? 'Set ✓' : 'Missing ✗'}`);
         console.log(`   EMAIL_APP_PASSWORD: ${process.env.EMAIL_APP_PASSWORD ? 'Set ✓' : 'Missing ✗'}`);
-        console.log('\n' + '─'.repeat(60));
+        console.log('');
     });
     
     // Verify email configuration after server starts
-    setTimeout(verifyEmailConfig, 2000);
+    setTimeout(verifyEmailConfig, 1000);
 }
 
 // Graceful shutdown
